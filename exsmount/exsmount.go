@@ -332,8 +332,20 @@ func CreateAttach(cli *Args) ([]string, error) {
 		defer func() {
 			if !attached {
 				log.Println("batchit: unsuccessful EBS volume attachment, deleting volume")
-				_, err := svc.DeleteVolume(&ec2.DeleteVolumeInput{VolumeId: rsp.VolumeId})
+				doDelete := func() (*ec2.DeleteVolumeOutput, error) {
+					return svc.DeleteVolume(&ec2.DeleteVolumeInput{VolumeId: rsp.VolumeId})
+				}
+				_, err0 := doDelete()
+				if strings.Contains(err0.Error(), "RequestLimitExceeded") {
+					log.Println("RequestLimitExceeded while trying to delete volume")
+					time.Sleep(time.Duration(10+rand.Intn(90)) * time.Second)
+					// var err2 error
+					if _, err2 := doDelete(); err2 != nil {
+						log.Println("WARNING: this usually means you need to space out job submissions")
+					}
+				}
 				if err != nil {
+
 					log.Println(err)
 				}
 			}
@@ -358,20 +370,36 @@ func CreateAttach(cli *Args) ([]string, error) {
 					koff += rand.Intn(5)
 				}
 
-				if _, err := svc.AttachVolume(&ec2.AttachVolumeInput{
-					InstanceId: aws.String(iid.InstanceId),
-					VolumeId:   rsp.VolumeId,
-					Device:     aws.String(attachDevice),
-				}); err != nil {
+				// clos := func() (*ec2.VolumeAttachment, error) {
+				// 	return func()
+				//
+				// }
+				doAttachment := func() (*ec2.VolumeAttachment, error) {
+					result, err := svc.AttachVolume(&ec2.AttachVolumeInput{
+						InstanceId: aws.String(iid.InstanceId),
+						VolumeId:   rsp.VolumeId,
+						Device:     aws.String(attachDevice),
+					})
+					return result, err
+				}
+
+				if _, err0 := doAttachment(); err0 != nil {
 					// race condition attaching devices from multiple containers to the same host /dev address.
 					// so retry 7 times (k) with randomish wait time.
-					log.Printf("retrying EBS attach because of difficulty getting volume. error was: %+T. %s", err, err)
-					if strings.Contains(err.Error(), "is already in use") {
+					log.Printf("retrying EBS attach because of difficulty getting volume. error was: %+T. %s", err0, err0)
+					if strings.Contains(err0.Error(), "is already in use") {
 						time.Sleep((time.Duration(3 * (k + rand.Int63n(2*k)))) * time.Second)
 						continue
+					} else if strings.Contains(err0.Error(), "RequestLimitExceeded") {
+						time.Sleep(time.Duration(10+rand.Intn(90)) * time.Second)
+						var err2 error
+						if _, err2 = doAttachment(); err2 != nil {
+							log.Println("WARNING: this usually means you need to space out job submissions")
+							return nil, errors.Wrap(err2, "error attaching volume")
+						}
 					}
 
-					return nil, errors.Wrap(err, "error attaching device")
+					return nil, errors.Wrap(err0, "error attaching device")
 				}
 
 				volumes = append(volumes, *rsp.VolumeId)
@@ -393,11 +421,18 @@ func CreateAttach(cli *Args) ([]string, error) {
 		}
 
 		if !cli.Keep {
-			if err := DeleteOnTermination(svc, iid.InstanceId, *rsp.VolumeId, attachDevice); err != nil {
+			if err0 := DeleteOnTermination(svc, iid.InstanceId, *rsp.VolumeId, attachDevice); err0 != nil {
+				if strings.Contains(err0.Error(), "RequestLimitExceeded") {
+					time.Sleep(time.Duration(10+rand.Intn(90)) * time.Second)
+					var err2 error
+					if err2 = DeleteOnTermination(svc, iid.InstanceId, *rsp.VolumeId, attachDevice); err2 != nil {
+						log.Println("WARNING: this usually means you need to space out job submissions")
+						return nil, errors.Wrap(err2, "error setting volume to delete on termination")
+					}
+				}
 				return nil, errors.Wrap(err, "error setting delete on termination")
 			}
 		}
-
 	}
 
 	fmt.Println(strings.Join(volumes, " "))
