@@ -335,14 +335,15 @@ func CreateAttach(cli *Args) ([]string, error) {
 				doDelete := func() (*ec2.DeleteVolumeOutput, error) {
 					return svc.DeleteVolume(&ec2.DeleteVolumeInput{VolumeId: rsp.VolumeId})
 				}
-				_, err0 := doDelete()
-				if strings.Contains(err0.Error(), "RequestLimitExceeded") {
-					log.Println("RequestLimitExceeded while trying to delete volume")
-					time.Sleep(time.Duration(10+rand.Intn(90)) * time.Second)
-					// var err2 error
-					if _, err2 := doDelete(); err2 != nil {
-						log.Println("WARNING: this usually means you need to space out job submissions")
+				if _, err0 := doDelete(); err0 != nil {
+					if strings.Contains(err0.Error(), "RequestLimitExceeded") {
+						log.Println("RequestLimitExceeded while trying to delete volume")
+						time.Sleep(time.Duration(10+rand.Intn(90)) * time.Second)
+						if _, err2 := doDelete(); err2 != nil {
+							log.Println("WARNING: this usually means you need to space out job submissions")
+						}
 					}
+
 				}
 				if err != nil {
 
